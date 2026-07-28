@@ -5,6 +5,7 @@ on:
     branches: [master]
   pull_request:
     branches: [master]
+    types: [opened, synchronize, reopened, labeled]
   schedule:
     - cron: '0 6 * * *'  # Nightly at 6am UTC
   workflow_dispatch:
@@ -95,10 +96,11 @@ jobs:
   tier2:
     name: Tier 2 (LLM Skills)
     runs-on: ubuntu-latest
-    # Runs on every push/PR now (promoted from schedule-only in v0.19.0).
-    # Tier 1 must pass first; Tier 2 uses OPENAI_API_KEY + ANTHROPIC_API_KEY
-    # from repo/org secrets. Nightly + manual triggers still supported via
-    # the workflow-level `on:` list.
+    # Live-LLM coverage is opt-in: manual dispatch or the `e2e-llm` PR label.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' &&
+       contains(github.event.pull_request.labels.*.name, 'e2e-llm'))
     needs: tier1
     timeout-minutes: 30
     services:

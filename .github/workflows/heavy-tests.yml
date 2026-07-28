@@ -2,7 +2,7 @@ name: Heavy Tests
 
 # Heavy ops-shape tests under tests/heavy/. Cost minutes per run; NOT part
 # of default PR CI. Two triggers:
-#   - Nightly schedule (catches regressions within 24h of merge to master).
+#   - Weekly schedule (catches regressions within 7d of merge to master).
 #   - On-demand opt-in via PR label `heavy-tests` (slow loop kept off by default).
 #   - Manual workflow_dispatch for triage.
 #
@@ -10,7 +10,7 @@ name: Heavy Tests
 
 on:
   schedule:
-    - cron: '17 8 * * *'  # 08:17 UTC daily — staggered to avoid noisy slots
+    - cron: '17 8 * * 0'  # Sundays at 08:17 UTC
   pull_request:
     # `synchronize` + `reopened` fire on subsequent pushes / reopens — without
     # them, a PR labeled `heavy-tests` would NEVER re-run heavy on later

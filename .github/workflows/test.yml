@@ -187,17 +187,10 @@ jobs:
     # Pure matrix shard — no verify, no serial. Each shard runs its slice
     # of the unit test set under one `bun test` invocation.
     #
-    # 10 shards (was 6) drops per-shard total from 532s → 287s. With the two
-    # dedicated jobs (slow-eval-longmemeval, slow-entity-resolve-perf) also
-    # pulled out, the matrix is bounded by ~287s ≈ 4.8 min. Total CI ≈ max
-    # of matrix + slow-eval (~3.3 min after engine-sharing in TODO #1) +
-    # slow-entity-resolve-perf (~2.6 min) ≈ 4.8 min.
+    # Four shards trade wall-clock for fewer billed setup/install minutes.
+    # Weight-aware LPT partitioning keeps the larger shards balanced.
     #
-    # Concurrency budget: 10 shards + verify + serial + slow-eval +
-    # slow-entity-resolve-perf + gitleaks + cache-check + cache-write +
-    # test-status = ~18 jobs × 2 concurrent PRs = 36. GitHub free-tier
-    # caps at ~20 concurrent jobs, so multi-PR days will see some queue
-    # pressure. Single-PR runs are unaffected.
+    # Concurrency budget: 4 shards plus 8 supporting jobs per run.
     #
     # Partition policy is weight-aware LPT bin-packing via scripts/sharding.ts
     # (replaces FNV-1a path hash). Weights live in scripts/test-weights.json,
@@ -214,7 +207,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6  # v2
@@ -225,8 +218,8 @@ jobs:
           path: ~/.bun/install/cache
           key: bun-cache-${{ runner.os }}-${{ hashFiles('bun.lock') }}
       - run: bun install
-      - name: Run test shard ${{ matrix.shard }}/10
-        run: scripts/test-shard.sh ${{ matrix.shard }} 10
+      - name: Run test shard ${{ matrix.shard }}/4
+        run: scripts/test-shard.sh ${{ matrix.shard }} 4
 
   # ──────────────────────────────────────────────────────────────────────
   # cache-write: ONLY runs when every gated job succeeded. Writes the
