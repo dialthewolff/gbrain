@@ -1,8 +1,8 @@
 /**
  * #2194 fix #5: `gbrain doctor` warns when autopilot's per-tick fan-out exceeds
- * the worker's effective concurrency. Fanning out more cycles than there are
- * worker slots guarantees waiters that race the stalled-sweeper — a silent
- * misconfig the operator never saw before this check.
+ * effective safe capacity. Fanning out more cycles than there are worker slots
+ * after reserving global-maintenance + child capacity guarantees waiters that
+ * race the stalled-sweeper — a silent misconfig the operator never saw before.
  *
  * Drives computeAutopilotFanoutConcurrencyCheck directly with a fake engine so
  * the fan-out (config) and concurrency (audit) inputs are controllable without
@@ -53,12 +53,12 @@ function writeStarted(concurrency: number): void {
 }
 
 describe('computeAutopilotFanoutConcurrencyCheck (#2194 fix #5)', () => {
-  test('warns when fan-out (4) exceeds effective slots (concurrency 2 → 1)', async () => {
+  test('warns when fan-out (4) exceeds safe slots (concurrency 2 → 0)', async () => {
     writeStarted(2);
     const check = await computeAutopilotFanoutConcurrencyCheck(fakeEngine());
     expect(check.status).toBe('warn');
     expect(check.message).toContain('exceeds worker concurrency');
-    expect(check.details).toMatchObject({ fanout_max: 4, concurrency: 2, effective_slots: 1 });
+    expect(check.details).toMatchObject({ fanout_max: 4, concurrency: 2, effective_slots: 0 });
   });
 
   test('ok when fan-out fits (override 1, concurrency 4)', async () => {
