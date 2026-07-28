@@ -92,6 +92,15 @@ export interface FanoutResult {
  * PGLite produces no parallelism, only queue pressure. The override is
  * still allowed (operator opt-in) but documented as ineffective on PGLite.
  */
+/** Worker capacity = every possible waiting parent plus one child slot. */
+export function resolveManagedWorkerConcurrency(fanoutMax: number): number {
+  return fanoutMax + 2; // per-source parents + global-maintenance parent + child
+}
+
+export function clampFanoutToManagedWorker(fanoutMax: number, workerConcurrency: number): number {
+  return Math.max(0, Math.min(fanoutMax, workerConcurrency - 2));
+}
+
 export async function resolveFanoutMax(engine: BrainEngine): Promise<number> {
   const override = await engine.getConfig('autopilot.fanout_max_per_tick');
   if (override) {
@@ -132,8 +141,8 @@ export async function readSupervisorConcurrency(queue = 'default'): Promise<numb
  * Resolve fanoutMax CLAMPED to the worker's effective concurrency (#2194 fix #1).
  *
  * Fanning out more cycles than the worker can run guarantees waiters that then
- * race the stalled-sweeper. Clamp to `max(1, concurrency - 1)` — reserving ≥1
- * slot for targeted sync/embed jobs that share the `default` queue.
+ * race the stalled-sweeper. Reserve one global-maintenance parent and one child
+ * slot; low-concurrency workers may therefore run zero per-source parents.
  *
  * codex #9 / D5: the clamp is BEHAVIOR-changing, so it trusts only a
  * proven-alive supervisor (live DB-lock holder, `ttl_expires_at`-gated). With
@@ -152,7 +161,7 @@ export async function resolveEffectiveFanoutMax(engine: BrainEngine, queue = 'de
     if (!snap || !isLockHolderLive(snap, SUPERVISOR_LOCK_TTL_MIN)) return base; // no live holder → unknown → no clamp
     const concurrency = await readSupervisorConcurrency(queue);
     if (concurrency === null) return base;
-    return Math.max(1, Math.min(base, concurrency - 1));
+    return clampFanoutToManagedWorker(base, concurrency);
   } catch {
     return base;
   }
