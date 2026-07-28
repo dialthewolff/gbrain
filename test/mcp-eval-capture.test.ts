@@ -175,8 +175,9 @@ describe('op-layer capture — query', () => {
     expect(rows).toHaveLength(0);
   });
 
-  test('explicit source_id overrides ctx.sourceId for query retrieval', async () => {
+  test('trusted local explicit source_id overrides ctx.sourceId for query retrieval', async () => {
     const ctx = makeCtx({
+      remote: false,
       sourceId: 'default',
       config: makeConfig({ capture: false }),
     });

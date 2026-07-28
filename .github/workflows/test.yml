@@ -187,10 +187,12 @@ jobs:
     # Pure matrix shard — no verify, no serial. Each shard runs its slice
     # of the unit test set under one `bun test` invocation.
     #
-    # Four shards trade wall-clock for fewer billed setup/install minutes.
+    # Ten shards keep each Bun process small enough that PGLite perf gates stay
+    # meaningful and finish well below the job timeout. Four overloaded every
+    # shard, timed out at 22 minutes, and cost more without producing a result.
     # Weight-aware LPT partitioning keeps the larger shards balanced.
     #
-    # Concurrency budget: 4 shards plus 8 supporting jobs per run.
+    # Concurrency budget: 10 shards plus 8 supporting jobs per run.
     #
     # Partition policy is weight-aware LPT bin-packing via scripts/sharding.ts
     # (replaces FNV-1a path hash). Weights live in scripts/test-weights.json,
@@ -207,7 +209,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6  # v2
@@ -218,8 +220,8 @@ jobs:
           path: ~/.bun/install/cache
           key: bun-cache-${{ runner.os }}-${{ hashFiles('bun.lock') }}
       - run: bun install
-      - name: Run test shard ${{ matrix.shard }}/4
-        run: scripts/test-shard.sh ${{ matrix.shard }} 4
+      - name: Run test shard ${{ matrix.shard }}/10
+        run: scripts/test-shard.sh ${{ matrix.shard }} 10
 
   # ──────────────────────────────────────────────────────────────────────
   # cache-write: ONLY runs when every gated job succeeded. Writes the
