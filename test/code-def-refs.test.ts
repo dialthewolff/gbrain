@@ -15,6 +15,7 @@ import { PGLiteEngine } from '../src/core/pglite-engine.ts';
 import { importCodeFile } from '../src/core/import-file.ts';
 import { findCodeDef } from '../src/commands/code-def.ts';
 import { findCodeRefs } from '../src/commands/code-refs.ts';
+import { operationsByName, type OperationContext } from '../src/core/operations.ts';
 
 let engine: PGLiteEngine;
 
@@ -144,6 +145,13 @@ export async function performDump(engine: BrainEngine, slug: string): Promise<Br
 `;
   await importCodeFile(engine, 'src/engine.ts', brainEngineSrc, { noEmbed: true });
   await importCodeFile(engine, 'src/sync.ts', consumerSrc, { noEmbed: true });
+  await engine.executeRaw(
+    `INSERT INTO sources (id, name, local_path) VALUES ('other', 'other', '/tmp/other') ON CONFLICT (id) DO NOTHING`,
+  );
+  await importCodeFile(engine, 'src/other.ts', 'export interface BrainEngine { other(): void }', {
+    noEmbed: true,
+    sourceId: 'other',
+  });
 });
 
 afterAll(async () => {
@@ -182,6 +190,13 @@ describe('findCodeDef', () => {
     const results = await findCodeDef(engine, 'BrainEngine', { language: 'python' });
     expect(results).toEqual([]);
   });
+
+  test('source filter excludes same-symbol definitions from other sources', async () => {
+    expect((await findCodeDef(engine, 'BrainEngine', { sourceId: 'default' })).map(r => r.slug))
+      .not.toContain('src-other-ts');
+    expect((await findCodeDef(engine, 'BrainEngine', { sourceId: 'other' })).map(r => r.slug))
+      .toEqual(['src-other-ts']);
+  });
 });
 
 describe('findCodeRefs', () => {
@@ -218,5 +233,38 @@ describe('findCodeRefs', () => {
       expect(r.snippet.length).toBeGreaterThan(0);
       expect(r.snippet.length).toBeLessThanOrEqual(500);
     }
+  });
+
+  test('source filter excludes references from other sources', async () => {
+    expect((await findCodeRefs(engine, 'BrainEngine', { sourceId: 'default' })).map(r => r.slug))
+      .not.toContain('src-other-ts');
+    const other = await findCodeRefs(engine, 'BrainEngine', { sourceId: 'other' });
+    expect(other.length).toBeGreaterThan(0);
+    expect(other.every(r => r.slug === 'src-other-ts')).toBe(true);
+  });
+});
+
+describe('MCP code definition/reference scope', () => {
+  test('remote grant is applied to code_def and code_refs', async () => {
+    const ctx: OperationContext = {
+      engine, config: {} as any, logger: console as any, dryRun: false, remote: true,
+      sourceId: 'default',
+      auth: { token: 't', clientId: 'c', scopes: [], allowedSources: ['default'] } as any,
+    };
+    const defs = await operationsByName.code_def.handler(ctx, { symbol: 'BrainEngine' }) as any;
+    const refs = await operationsByName.code_refs.handler(ctx, { symbol: 'BrainEngine' }) as any;
+    expect(defs.defs.map((r: any) => r.slug)).not.toContain('src-other-ts');
+    expect(refs.refs.map((r: any) => r.slug)).not.toContain('src-other-ts');
+  });
+
+  test('remote scalar grants cannot override source_id', async () => {
+    const ctx: OperationContext = {
+      engine, config: {} as any, logger: console as any, dryRun: false, remote: true,
+      sourceId: 'default',
+    };
+    await expect(operationsByName.code_def.handler(ctx, { symbol: 'BrainEngine', source_id: 'other' }))
+      .rejects.toMatchObject({ code: 'permission_denied' });
+    await expect(operationsByName.code_refs.handler(ctx, { symbol: 'BrainEngine', source_id: 'other' }))
+      .rejects.toMatchObject({ code: 'permission_denied' });
   });
 });
