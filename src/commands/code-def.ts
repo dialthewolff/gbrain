@@ -30,7 +30,7 @@ export interface CodeDefResult {
 export async function findCodeDef(
   engine: BrainEngine,
   symbol: string,
-  opts: { limit?: number; language?: string } = {},
+  opts: { limit?: number; language?: string; sourceId?: string; allSources?: boolean } = {},
 ): Promise<CodeDefResult[]> {
   const limit = opts.limit ?? 20;
   // v0.41 D2: SQL DDL targets (table/view/index/procedure/schema/database/
@@ -51,12 +51,18 @@ export async function findCodeDef(
     'method declaration', 'method definition', 'constructor declaration',
     'field declaration', 'field definition', 'struct specifier', 'protocol declaration',
   ];
-  const params: unknown[] = [symbol, limit];
+  const params: unknown[] = [symbol];
   let whereLang = '';
   if (opts.language) {
-    params.splice(1, 0, opts.language);
-    whereLang = 'AND cc.language = $2';
+    params.push(opts.language);
+    whereLang = `AND cc.language = $${params.length}`;
   }
+  let whereSource = '';
+  if (!opts.allSources && opts.sourceId) {
+    params.push(opts.sourceId);
+    whereSource = `AND p.source_id = $${params.length}`;
+  }
+  params.push(limit);
   // Deterministic ordering: exact type matches first (functions before
   // export_statement wrappers), then page slug, then line number.
   const rows = await engine.executeRaw<{
@@ -70,6 +76,7 @@ export async function findCodeDef(
      JOIN pages p ON p.id = cc.page_id
      WHERE cc.symbol_name = $1
        ${whereLang}
+       ${whereSource}
        AND p.page_kind = 'code'
        AND cc.symbol_type IN ('${DEF_TYPES.join("','")}', 'export statement')
      ORDER BY

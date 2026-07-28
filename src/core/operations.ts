@@ -539,8 +539,9 @@ export function linkReadScopeOpts(ctx: OperationContext): { sourceId?: string; s
  *       trusted local (remote === false) → `{}` (spans the whole brain)
  *       remote                           → the caller's grant (sourceScopeOpts)
  *   - explicit `source_id`:
- *       remote + federated grant that doesn't include it → permission_denied
- *       otherwise                                        → `{ sourceId }`
+ *       trusted local                         → requested source
+ *       remote + federated grant              → must be inside the grant
+ *       remote + scalar grant                 → must equal `ctx.sourceId`
  *   - neither → the caller's grant (sourceScopeOpts).
  *
  * `code_traversal_cache_clear` is intentionally NOT a caller — it is localOnly
@@ -556,13 +557,18 @@ export function resolveRequestedScope(
     return ctx.remote === false ? {} : sourceScopeOpts(ctx);
   }
   if (sourceIdParam !== undefined) {
-    const allowed = ctx.auth?.allowedSources;
-    if (ctx.remote !== false && allowed && allowed.length > 0 && !allowed.includes(sourceIdParam)) {
-      throw new OperationError(
-        'permission_denied',
-        `source '${sourceIdParam}' is outside your granted sources`,
-        'Request access to this source, or omit source_id to search within your grant.',
-      );
+    if (ctx.remote !== false) {
+      const federated = ctx.auth?.allowedSources;
+      const granted = federated && federated.length > 0
+        ? federated
+        : (ctx.sourceId ? [ctx.sourceId] : []);
+      if (!granted.includes(sourceIdParam)) {
+        throw new OperationError(
+          'permission_denied',
+          `source '${sourceIdParam}' is outside your granted sources`,
+          'Request access to this source, or omit source_id to search within your grant.',
+        );
+      }
     }
     return { sourceId: sourceIdParam };
   }
@@ -2690,9 +2696,7 @@ const get_versions: Operation = {
     slug: { type: 'string', required: true },
   },
   handler: async (ctx, p) => {
-    // v0.31.8 (D20): thread ctx.sourceId.
-    const sourceOpts = ctx.sourceId ? { sourceId: ctx.sourceId } : {};
-    const versions = await ctx.engine.getVersions(p.slug as string, sourceOpts);
+    const versions = await ctx.engine.getVersions(p.slug as string, sourceScopeOpts(ctx));
     // Same takes-allow-list privacy boundary as get_page. Snapshots persist
     // historical compiled_truth verbatim, including the takes fence, so
     // a remote token bypassing get_page via /history would re-introduce
@@ -2783,9 +2787,7 @@ const get_raw_data: Operation = {
     source: { type: 'string', description: 'Filter by source' },
   },
   handler: async (ctx, p) => {
-    // v0.31.8 (D20 + D21): thread ctx.sourceId.
-    const sourceOpts = ctx.sourceId ? { sourceId: ctx.sourceId } : {};
-    return ctx.engine.getRawData(p.slug as string, p.source as string | undefined, sourceOpts);
+    return ctx.engine.getRawData(p.slug as string, p.source as string | undefined, sourceScopeOpts(ctx));
   },
   scope: 'read',
 };
@@ -2815,9 +2817,7 @@ const get_chunks: Operation = {
     slug: { type: 'string', required: true },
   },
   handler: async (ctx, p) => {
-    // v0.31.8 (D20): thread ctx.sourceId.
-    const sourceOpts = ctx.sourceId ? { sourceId: ctx.sourceId } : {};
-    return ctx.engine.getChunks(p.slug as string, sourceOpts);
+    return ctx.engine.getChunks(p.slug as string, sourceScopeOpts(ctx));
   },
   scope: 'read',
 };
@@ -4408,17 +4408,25 @@ const code_def: Operation = {
     symbol: { type: 'string', required: true, description: 'Symbol name (bare token; e.g., parseMarkdown, BrainEngine).' },
     limit: { type: 'number', description: 'Max definition sites returned. Default 20.' },
     lang: { type: 'string', description: "Filter by content_chunks.language (e.g. 'typescript', 'python')." },
+    source_id: { type: 'string', description: "Scope to a single source. Defaults to ctx.sourceId; '__all__' spans every source for trusted local callers." },
+    all_sources: { type: 'boolean', description: 'Span sources: every source locally; remote callers must select one granted source.' },
   },
   scope: 'read',
   handler: async (ctx, p) => {
     const { findCodeDef } = await import('../commands/code-def.ts');
+    const { allSources, sourceId } = resolveCodeIntelScope(
+      ctx,
+      typeof p.source_id === 'string' ? p.source_id : undefined,
+      p.all_sources === true,
+    );
     const defs = await findCodeDef(ctx.engine, p.symbol as string, {
       limit: (p.limit as number) ?? 20,
       language: (p.lang as string) || undefined,
+      sourceId,
+      allSources,
     });
-    // code_def is brain-wide (not source-scoped); readiness is 'symbol' grain.
     const { resolveCodeReadiness } = await import('./code-graph-readiness.ts');
-    const readiness = await resolveCodeReadiness(ctx.engine, { kind: 'symbol', count: defs.length });
+    const readiness = await resolveCodeReadiness(ctx.engine, { kind: 'symbol', count: defs.length, sourceId, allSources });
     return { symbol: p.symbol as string, count: defs.length, status: readiness.status, ready: readiness.ready, defs };
   },
   cliHints: { name: 'code_def', hidden: true },
@@ -4431,17 +4439,25 @@ const code_refs: Operation = {
     symbol: { type: 'string', required: true, description: 'Symbol to find references to.' },
     limit: { type: 'number', description: 'Max references returned. Default 50.' },
     lang: { type: 'string', description: "Filter by content_chunks.language." },
+    source_id: { type: 'string', description: "Scope to a single source. Defaults to ctx.sourceId; '__all__' spans every source for trusted local callers." },
+    all_sources: { type: 'boolean', description: 'Span sources: every source locally; remote callers must select one granted source.' },
   },
   scope: 'read',
   handler: async (ctx, p) => {
     const { findCodeRefs } = await import('../commands/code-refs.ts');
+    const { allSources, sourceId } = resolveCodeIntelScope(
+      ctx,
+      typeof p.source_id === 'string' ? p.source_id : undefined,
+      p.all_sources === true,
+    );
     const refs = await findCodeRefs(ctx.engine, p.symbol as string, {
       limit: (p.limit as number) ?? 50,
       language: (p.lang as string) || undefined,
+      sourceId,
+      allSources,
     });
-    // code_refs is brain-wide (not source-scoped); readiness is 'symbol' grain.
     const { resolveCodeReadiness } = await import('./code-graph-readiness.ts');
-    const readiness = await resolveCodeReadiness(ctx.engine, { kind: 'symbol', count: refs.length });
+    const readiness = await resolveCodeReadiness(ctx.engine, { kind: 'symbol', count: refs.length, sourceId, allSources });
     return { symbol: p.symbol as string, count: refs.length, status: readiness.status, ready: readiness.ready, refs };
   },
   cliHints: { name: 'code_refs', hidden: true },
