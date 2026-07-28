@@ -36,7 +36,7 @@ export interface CodeRefResult {
 export async function findCodeRefs(
   engine: BrainEngine,
   symbol: string,
-  opts: { limit?: number; language?: string; sourceId?: string; allSources?: boolean } = {},
+  opts: { limit?: number; language?: string } = {},
 ): Promise<CodeRefResult[]> {
   const limit = opts.limit ?? 50;
   const params: unknown[] = [`%${symbol}%`];
@@ -44,11 +44,6 @@ export async function findCodeRefs(
   if (opts.language) {
     params.push(opts.language);
     whereLang = `AND cc.language = $${params.length}`;
-  }
-  let whereSource = '';
-  if (!opts.allSources && opts.sourceId) {
-    params.push(opts.sourceId);
-    whereSource = `AND p.source_id = $${params.length}`;
   }
   params.push(limit);
   const rows = await engine.executeRaw<{
@@ -65,7 +60,6 @@ export async function findCodeRefs(
      WHERE p.page_kind = 'code'
        AND cc.chunk_text ILIKE $1
        ${whereLang}
-       ${whereSource}
      ORDER BY p.slug, cc.start_line NULLS LAST
      LIMIT $${params.length}`,
     params,

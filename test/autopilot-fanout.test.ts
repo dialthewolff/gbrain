@@ -16,8 +16,6 @@ import {
   isSourceStale,
   selectSourcesForDispatch,
   resolveFanoutMax,
-  resolveManagedWorkerConcurrency,
-  clampFanoutToManagedWorker,
   dispatchPerSource,
 } from '../src/commands/autopilot-fanout.ts';
 import type { SourceRow, BrainEngine } from '../src/core/engine.ts';
@@ -73,17 +71,6 @@ describe('isSourceStale', () => {
     const past = new Date(NOW - 6 * 60_000).toISOString();
     expect(isSourceStale(src('a', past), NOW, 5)).toBe(true);
     expect(isSourceStale(src('a', past), NOW, 60)).toBe(false);
-  });
-});
-
-describe('managed worker capacity', () => {
-  test('reserves one child slot and caps runtime fanout to startup capacity', () => {
-    for (const fanoutMax of [1, 4, 10]) {
-      const concurrency = resolveManagedWorkerConcurrency(fanoutMax);
-      expect(concurrency - (fanoutMax + 1)).toBe(1);
-      expect(clampFanoutToManagedWorker(fanoutMax + 10, concurrency)).toBe(fanoutMax);
-      expect(clampFanoutToManagedWorker(1, concurrency)).toBe(1);
-    }
   });
 });
 

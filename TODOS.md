@@ -62,8 +62,14 @@ Deferred from the provider-agnostic plumbing wave (#1249/#1250/#1292/#2271/#2209
 Plan + review trail at `~/.claude/plans/system-instruction-you-are-working-keen-newell.md`.
 The eng-review + Codex outside-voice narrowed the wave to these deferrals:
 
-- [x] **P2 — Capability-aware query expansion on OpenAI-compat providers (#2372).**
-  Completed by #2373: chat-capable recipes expose expansion touchpoints and the gateway falls back from structured output to text.
+- [ ] **P2 — Capability-aware query expansion on OpenAI-compat providers (#2372).**
+  Expansion only runs for recipes that declare an `expansion` touchpoint, and only the
+  native providers (anthropic/openai/google) do. To make expansion work on
+  litellm/openrouter/groq/together/deepseek you must ADD expansion touchpoints to those
+  chat-capable recipes AND add a `generateObject`→`generateText` capability fallback for
+  backends without strict structured outputs. Feature-shaped; overlaps the general
+  OpenAI-compat proxy story (`docs/designs/COMMUNITY_IDEAS.md`). Community PR #2373 is a
+  starting point. Where: `src/core/ai/gateway.ts:expand`, recipe files, `types.ts` (ExpansionTouchpoint).
 - [ ] **P2 — LiteLLM as a chat/expansion backend.** `litellm-proxy` declares ONLY an
   embedding touchpoint, so `think`/chat on LiteLLM is dead. Add chat (and expansion) so a
   LiteLLM proxy is a full LLM backend, not embedding-only. The general OpenAI-compat proxy story.
@@ -83,8 +89,13 @@ The eng-review + Codex outside-voice narrowed the wave to these deferrals:
 - [ ] **P3 — OpenRouter per-model custom-dim handling.** OpenRouter declares recipe-wide
   `dims_options` and mixes fixed-dim + arbitrary models, so it's excluded from `trust_custom_dims`.
   A per-model story would let OpenRouter accept custom dims for models that support them.
-- [x] **P1 — Gateway subagent-loop tool-result persistence + Date normalization (#2273/#2256).**
-  Completed by #2820: tool-result turns persist through gateway retries and Date values are normalized before AI SDK validation.
+- [ ] **P1 — Gateway subagent-loop tool-result persistence + Date normalization (#2273/#2256).**
+  Confirmed crash-block: non-Anthropic subagent jobs dead-letter after any interruption
+  (tool-result user turns aren't persisted; raw Date values fail the AI SDK's strict JSON
+  check). Larger self-contained change with 6 competing community PRs
+  (#2274/#2257/#1934/#2065/#2112/#2336) — pick one canonical impl, preserve authorship.
+  This is the immediate fast-follow to the provider-agnostic wave. Where:
+  `src/core/ai/gateway.ts:toolLoop`/`toModelMessages`, `src/core/minions/handlers/subagent.ts`.
 
 ## Life Chronicle follow-ups (filed v0.42.56.0, #2390)
 
@@ -204,13 +215,29 @@ job) and sync. See CLAUDE.md "Pace Mode".
 
 ## gbrain#2200 federated-read follow-ups (filed v0.42.46.0)
 
-- [x] **P1 — Close the federated-read scope on the remaining same-class by-slug/code reads.**
-  Completed: `get_chunks`, `get_raw_data`, and `get_versions` now thread
-  `sourceScopeOpts(ctx)` through both engines with federated-array precedence;
-  `code_def` and `code_refs` now use the shared fail-closed code-intel scope
-  resolver. `resolve_slugs` and `takes_search` were already scoped by #3242 and
-  the takes source-scope wave. Regression coverage seeds same-slug/same-symbol
-  rows in two sources and proves out-of-grant rows stay hidden.
+- [ ] **P1 — Close the federated-read scope on the remaining same-class by-slug read ops.**
+  v0.42.46.0 (#2200) routed `get_page` tags + `get_tags` / `get_links` / `get_backlinks` /
+  `get_timeline` through the federated source scope and taught the engine methods to honor
+  `sourceIds[]`. The adversarial review (Codex + Claude) flagged sibling read ops in the
+  SAME class that still use scalar-only `ctx.sourceId ? {sourceId} : {}` and never thread
+  `ctx.auth.allowedSources`: `get_chunks`, `get_raw_data`, `get_versions`, `resolve_slugs`
+  (the standalone op — `resolve_slugs` passes NO scope at all), plus (per the v0.42.55.0
+  eng-review codex pass) `takes_search` (`operations.ts:1727` — holder-allowlist only, no
+  `sourceScopeOpts`) and `code_def` (`operations.ts:4155` — brain-wide raw SQL over
+  `content_chunks`; confirm whether brain-wide is intentional before scoping). A remote
+  federated client (grant set, dispatch-default `ctx.sourceId='default'`) reads these against
+  `default` or unscoped, not its grant.
+  - **Why:** same cross-source correctness/isolation class #2200 targets; a federated client
+    can't read chunks/raw-data/versions for an authorized non-default source, `resolve_slugs`
+    can fuzzy-resolve across all sources, and `takes_search`/`code_def` query without the grant.
+    The #2399 close-list deliberately did NOT blanket-close #1371/#2200 because of these residual
+    surfaces — close those issues only after this TODO lands.
+  - **How to start:** mirror the #2200 pattern — route each handler through `sourceScopeOpts(ctx)`
+    (or `linkReadScopeOpts` if a far endpoint exists), add `sourceIds?: string[]` to the engine
+    methods (`getChunks` / `getRawData` / `getVersions` / `resolveSlugs` / the takes-search +
+    code-def queries) with `source_id = ANY($::text[])` precedence, and add federated/isolation
+    tests + engine-parity arms.
+  - **Depends on:** nothing; #2200 established the pattern and the `linkReadScopeOpts` helper.
 
 ## Spend-controls wave follow-ups (filed v0.42.45.0, #2139)
 
@@ -578,8 +605,26 @@ deliberately scoped OUT of the tool-schema fix (it's pre-existing + a separate
 structural change). Plan + GSTACK REVIEW REPORT at
 `~/.claude/plans/system-instruction-you-are-working-abstract-willow.md`.
 
-- [x] **P1 — Gateway toolLoop crash-replay sends a malformed ModelMessage history.**
-  Completed by #2820; this duplicated the #2273/#2256 persistence item above.
+- [ ] **P1 — Gateway toolLoop crash-replay sends a malformed ModelMessage
+  history.** The gateway path never persists the tool-result feedback message:
+  `toolLoop` pushes `{role:'user', content: toolResultBlocks}` with `void
+  messageIdx` and NO persistence callback, so only assistant turns reach
+  `subagent_messages` (via `onAssistantTurn`). On any multi-turn resume,
+  `loadPriorMessages` (`subagent.ts:769`) returns
+  `[user, assistant(tool-call), assistant(...), ...]` with the tool-result
+  messages MISSING — a history the real AI SDK v6 rejects ("tool result missing
+  for tool call"). The direct-Anthropic path reconciles this at
+  `subagent.ts:334-418` (synthesize + persist the tool-result turn before the
+  first chat call); the gateway branch does not. **Fresh runs — the actual
+  #1782/#1764 reports — are unaffected**, which is why the tool-schema fix
+  shipped without it. Two fix options: (a) add an `onToolResults` persistence
+  callback to `toolLoop` so the feedback message lands in `subagent_messages`,
+  or (b) mirror the direct-path reconciliation in the gateway branch of
+  `subagent.ts` before the first `gatewayToolLoop` chat. Either is a structural
+  change to the replay contract — own PR, own review. Caught because every
+  toolLoop/replay test stubs the transport and never inspects the input
+  messages; pair the fix with a `MockLanguageModelV3 + generateText` replay test
+  (the seam landed in `test/ai/gateway-tools-schema.test.ts`).
 
 - [ ] **P2 — SkillOpt `best.md` not written in `--no-mutate` runs.** From PR
   #1708 (scoped out of the tool-schema wave as tangential): in `--no-mutate`
@@ -1945,8 +1990,14 @@ The original 3 items as filed (kept for traceability):
   `eval_capture_failures.reason` enum cleanup from the v0.25.0 P1 surgical
   hardenings list. Effort: human ~3 days / CC ~3 hours.
 
-- [x] **P0 — Wire nightly quality probe into autopilot scheduler.**
-  Completed by #3094: autopilot honors the config gate and schedules the probe on its nightly cadence.
+- [ ] **P0 — Wire nightly quality probe into autopilot scheduler.** The
+  phase ships callable (`src/core/cycle/nightly-quality-probe.ts`) with
+  full DI surface; doctor surfaces outcomes; the audit JSONL rotates
+  cleanly. What's NOT wired: `src/commands/autopilot.ts` doesn't invoke
+  `runNightlyQualityProbe(deps)` on its 24h cadence. Add the phase
+  trigger; honor `autopilot.nightly_quality_probe.enabled` config gate.
+  Already filed in v0.40.1.0 Track D follow-ups — re-filing here as P0
+  with explicit D1-wave dependency. Effort: human ~3 hours / CC ~30 min.
 
 ### D2 — Code-indexing promoted to P1 (peer of Cursor/Sourcegraph)
 
@@ -2603,8 +2654,7 @@ contributor traps.
 
 ## MCP fix wave follow-ups (v0.34.1)
 
-- [x] **v0.34.x: Source-scope `takes_*` ops.**
-  Completed: all four operations thread `sourceScopeOpts(ctx)` and both engines filter through the page source.
+- [ ] **v0.34.x: Source-scope `takes_*` ops (pre-existing leak surfaced during v0.34.1 adversarial review).** `takes_list`, `takes_search`, `takes_scorecard`, `takes_calibration` in `src/core/operations.ts:1248-1335` thread `ctx.takesHoldersAllowList` but never `ctx.sourceId`. An auth'd OAuth client scoped to `source_id='canon-a'` can call `takes_list --page_slug=foo` (slug in `canon-b`) and read takes attached to foreign-source pages. Pre-existing, not introduced by v0.34.1, but the wave was framed as "P0 source-isolation seal on the read path" and `takes_*` surfaces were missed. Fix: extend `TakesListOpts` in `src/core/engine.ts:186` with `sourceId?: string` + `sourceIds?: string[]`; thread `sourceScopeOpts(ctx)` at each op handler; engine `listTakes`/`searchTakes` filter via the `pages` JOIN.
 
 - [ ] **v0.34.x: Extend `sourceScopeOpts(ctx)` to the 14 read-side ops PR #861 didn't touch.** `get_page`, `get_tags`, `get_links`, `get_backlinks`, `get_timeline`, `list_files`, `get_file`, and the four `takes_*` ops (above) still use the v0.31.8-era `const sourceOpts = ctx.sourceId ? { sourceId: ctx.sourceId } : {}` pattern. NOT a leak (scalar `ctx.sourceId` IS threaded), but federated_read (#876, `ctx.auth?.allowedSources`) is silently dropped. A "WeCare L3 dept" client gets correct federated results from `search`/`query`/`list_pages`/`traverse_graph`/`find_experts` but only sees its scalar `source_id` for `get_page`/`get_tags`/etc. Fix: route all 14 sites through `sourceScopeOpts(ctx)`.
 

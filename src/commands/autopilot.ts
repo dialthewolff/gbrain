@@ -434,7 +434,6 @@ export async function runAutopilot(engine: BrainEngine, args: string[]) {
 
   let stopping = false;
   let childSupervisor: ChildWorkerSupervisor | null = null;
-  let autopilotWorkerConcurrency: number | null = null;
 
   // #1872: graceful engine shutdown. On PGLite the cycle steps run INLINE in
   // this process, so a hard `process.exit` mid-write (systemctl stop →
@@ -475,12 +474,10 @@ export async function runAutopilot(engine: BrainEngine, args: string[]) {
     // RAM) to [4096,16384]. Bare `gbrain jobs work` resolves the same default;
     // we pass it explicitly so the spawn log + child agree.
     const { resolveDefaultMaxRssMb } = await import('../core/minions/rss-default.ts');
-    const { resolveFanoutMax, resolveManagedWorkerConcurrency } = await import('./autopilot-fanout.ts');
     const autopilotMaxRssMb = resolveDefaultMaxRssMb();
-    autopilotWorkerConcurrency = resolveManagedWorkerConcurrency(await resolveFanoutMax(engine));
     childSupervisor = new ChildWorkerSupervisor({
       cliPath,
-      args: ['jobs', 'work', '--concurrency', String(autopilotWorkerConcurrency), '--max-rss', String(autopilotMaxRssMb)],
+      args: ['jobs', 'work', '--max-rss', String(autopilotMaxRssMb)],
       // process.env clone; autopilot doesn't gate shell jobs the way the
       // standalone supervisor does (autopilot is the operator-trust path).
       env: { ...process.env },
@@ -496,7 +493,7 @@ export async function runAutopilot(engine: BrainEngine, args: string[]) {
         // existing logs see the same lines.
         if (event.kind === 'worker_spawned') {
           console.log(
-            `[autopilot] Minions worker spawned (pid: ${event.pid}, concurrency: ${autopilotWorkerConcurrency}, watchdog: ${autopilotMaxRssMb}MB${event.tini ? ', tini: active' : ''})`,
+            `[autopilot] Minions worker spawned (pid: ${event.pid}, watchdog: ${autopilotMaxRssMb}MB${event.tini ? ', tini: active' : ''})`,
           );
         } else if (event.kind === 'worker_spawn_failed') {
           console.error(
@@ -978,15 +975,12 @@ export async function runAutopilot(engine: BrainEngine, args: string[]) {
           // codex P1-3). Fresh-install brains with no sources rows fall
           // back to the legacy single autopilot-cycle so existing
           // behavior is preserved.
-          const { dispatchPerSource, dispatchGlobalMaintenance, resolveEffectiveFanoutMax, clampFanoutToManagedWorker } = await import('./autopilot-fanout.ts');
+          const { dispatchPerSource, dispatchGlobalMaintenance, resolveEffectiveFanoutMax } = await import('./autopilot-fanout.ts');
           // #2194 fix #1: clamp fan-out to the worker's effective concurrency
           // (reserve ≥1 slot), gated on a LIVE supervisor so a stale audit row
           // can't shrink throughput (codex #9/D5). autopilot-cycle jobs run on
           // the 'default' queue, so that's the concurrency we compare against.
-          const requestedFanoutMax = await resolveEffectiveFanoutMax(engine, 'default');
-          const fanoutMax = autopilotWorkerConcurrency === null
-            ? requestedFanoutMax
-            : clampFanoutToManagedWorker(requestedFanoutMax, autopilotWorkerConcurrency);
+          const fanoutMax = await resolveEffectiveFanoutMax(engine, 'default');
           const result = await dispatchPerSource(engine, queue, {
             repoPath,
             slot,

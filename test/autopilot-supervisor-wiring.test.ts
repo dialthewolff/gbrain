@@ -50,10 +50,14 @@ describe('autopilot.ts ↔ ChildWorkerSupervisor wiring', () => {
     expect(AUTOPILOT_SRC).not.toContain('STABLE_RUN_RESET_MS');
   });
 
-  it("spawns the worker with safe concurrency and an auto-sized --max-rss", () => {
-    expect(AUTOPILOT_SRC).toContain("'jobs', 'work', '--concurrency', String(autopilotWorkerConcurrency)");
+  it("spawns the worker with an auto-sized --max-rss (issue #1678)", () => {
+    // Post-v0.41.39.0 the flat 2048 default is gone: autopilot resolves
+    // resolveDefaultMaxRssMb() (cgroup-aware) and passes it as the cap. The
+    // argv must still carry the --max-rss flag token + the resolved value.
     expect(AUTOPILOT_SRC).toContain("resolveDefaultMaxRssMb");
     expect(AUTOPILOT_SRC).toContain("'--max-rss', String(autopilotMaxRssMb)");
+    expect(AUTOPILOT_SRC).toContain("'jobs', 'work'");
+    // The footgun literal must NOT come back.
     expect(AUTOPILOT_SRC).not.toContain("'--max-rss', '2048'");
   });
 

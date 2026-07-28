@@ -1942,7 +1942,7 @@ export async function computeAutopilotFanoutConcurrencyCheck(engine: BrainEngine
       return { name: 'autopilot_fanout_concurrency', status: 'ok', message: 'No supervisor observed — skipping fan-out/concurrency check' };
     }
     const fanoutMax = await resolveFanoutMax(engine);
-    const effectiveSlots = Math.max(0, concurrency - 2);
+    const effectiveSlots = Math.max(1, concurrency - 1);
     if (fanoutMax > effectiveSlots) {
       return {
         name: 'autopilot_fanout_concurrency',
@@ -1951,7 +1951,7 @@ export async function computeAutopilotFanoutConcurrencyCheck(engine: BrainEngine
           `autopilot fan-out (${fanoutMax}/tick) exceeds worker concurrency (${concurrency}). ` +
           `Surplus cycles queue behind the worker and race the stalled-sweeper. ` +
           `Lower fan-out: \`gbrain config set autopilot.fanout_max_per_tick ${effectiveSlots}\`, ` +
-          `or raise the supervisor's \`--concurrency\` to ${fanoutMax + 2}. ` +
+          `or raise the supervisor's \`--concurrency\` to ${fanoutMax + 1}. ` +
           `(The clamp in autopilot does this automatically unless disabled.)`,
         details: { fanout_max: fanoutMax, concurrency, effective_slots: effectiveSlots },
       };

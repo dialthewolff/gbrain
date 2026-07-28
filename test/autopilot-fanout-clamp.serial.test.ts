@@ -1,8 +1,7 @@
 /**
  * #2194 fix #1 (codex #9 / D5): resolveEffectiveFanoutMax clamps the per-tick
- * fan-out to the worker's safe capacity (max(0, concurrency-2), reserving a
- * global-maintenance parent and a child slot) — but ONLY when a LIVE supervisor
- * holds the queue lock.
+ * fan-out to the worker's effective concurrency (max(1, concurrency-1),
+ * reserving ≥1 slot) — but ONLY when a LIVE supervisor holds the queue lock.
  * A stale `started` audit row must not shrink throughput for a supervisor that
  * isn't running that config, so with no live holder the clamp is skipped and
  * the unclamped base is used.
@@ -63,13 +62,13 @@ describe('resolveEffectiveFanoutMax — clamp gated on live supervisor (#2194/co
     expect(n).toBe(8); // unclamped base
   });
 
-  test('live holder + concurrency 3 → reserve global + child slots, fanout = 1', async () => {
+  test('live holder + concurrency 3 → clamp to max(1, 3-1) = 2', async () => {
     writeStarted(3);
     const holder = await tryAcquireDbLock(engine, supervisorLockId('default'), SUPERVISOR_LOCK_TTL_MIN);
     expect(holder).not.toBeNull();
     try {
       const n = await resolveEffectiveFanoutMax(engine, 'default');
-      expect(n).toBe(1);
+      expect(n).toBe(2);
     } finally {
       await holder!.release();
     }
@@ -87,12 +86,12 @@ describe('resolveEffectiveFanoutMax — clamp gated on live supervisor (#2194/co
     }
   });
 
-  test('live holder + concurrency 1 → no per-source fanout', async () => {
+  test('live holder + concurrency 1 → floor at 1 (never below 1)', async () => {
     writeStarted(1);
     const holder = await tryAcquireDbLock(engine, supervisorLockId('default'), SUPERVISOR_LOCK_TTL_MIN);
     try {
       const n = await resolveEffectiveFanoutMax(engine, 'default');
-      expect(n).toBe(0);
+      expect(n).toBe(1);
     } finally {
       await holder!.release();
     }
