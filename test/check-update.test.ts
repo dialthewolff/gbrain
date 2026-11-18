@@ -4,6 +4,8 @@ import {
   isMinorOrMajorBump,
   isNewerVersion,
   extractChangelogBetween,
+  CHECK_UPDATE_CHANGELOG_PREVIEW_LIMIT,
+  summarizeChangelogDiff,
 } from '../src/commands/check-update.ts';
 
 describe('parseSemver', () => {
@@ -163,6 +165,32 @@ describe('extractChangelogBetween', () => {
   });
 });
 
+describe('bounded JSON changelog preview', () => {
+  test('keeps a short changelog intact', () => {
+    const expected = '## Release\\n- Fixed bug';
+    const result = summarizeChangelogDiff(expected);
+    expect(result).toEqual({text: expected, truncated: false, total_length: expected.length});
+  });
+
+  test('bounds a multi-megabyte diff while retaining its original size', () => {
+    const huge = '# release\\n' + 'x'.repeat(6_000_000);
+    const result = summarizeChangelogDiff(huge);
+    expect(result.truncated).toBe(true);
+    expect(result.total_length).toBe(huge.length);
+    expect(result.text.length).toBe(CHECK_UPDATE_CHANGELOG_PREVIEW_LIMIT);
+    expect(huge.startsWith(result.text)).toBe(true);
+    expect(JSON.parse(JSON.stringify(result))).toEqual(result);
+  });
+
+  test('does not split a UTF-16 surrogate pair at preview boundary', () => {
+    const input = 'a'.repeat(CHECK_UPDATE_CHANGELOG_PREVIEW_LIMIT - 1) + '🌍' + 'other';
+    const result = summarizeChangelogDiff(input);
+    expect(result.truncated).toBe(true);
+    expect(result.text).toBe('a'.repeat(CHECK_UPDATE_CHANGELOG_PREVIEW_LIMIT - 1));
+    expect(result.total_length).toBe(input.length);
+  });
+});
+
 describe('check-update CLI', () => {
   test('check-update is in CLI_ONLY set', async () => {
     const source = await Bun.file(
@@ -199,5 +227,8 @@ describe('check-update CLI', () => {
     expect(output).toHaveProperty('upgrade_command');
     expect(output).toHaveProperty('current_source', 'package-json');
     expect(typeof output.update_available).toBe('boolean');
+    expect(typeof output.changelog_diff_truncated).toBe('boolean');
+    expect(typeof output.changelog_diff_total_length).toBe('number');
+    expect(output.changelog_diff.length).toBeLessThanOrEqual(CHECK_UPDATE_CHANGELOG_PREVIEW_LIMIT);
   });
 });

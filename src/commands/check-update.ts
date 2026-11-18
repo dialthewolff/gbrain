@@ -32,8 +32,36 @@ interface CheckUpdateResult {
   upgrade_command: string;
   release_url: string;
   changelog_diff: string;
+  /** True if the JSON changelog is a bounded preview rather than the full upstream text. */
+  changelog_diff_truncated: boolean;
+  /** Original string length (UTF-16 code units), before limiting stdout. */
+  changelog_diff_total_length: number;
   published_at: string;
   error?: string;
+}
+
+/**
+ * CLI JSON is consumed through a pipe and the one-shot runner uses bounded
+ * stdout flushing. Upstream CHANGELOG.md is now multiple megabytes, so printing
+ * the entire diff can yield truncated/invalid JSON despite exit code zero.
+ *
+ * Retain a useful prefix and report the truncation explicitly. The existing
+ * release_url points at the complete, authoritative changelog.
+ */
+export const CHECK_UPDATE_CHANGELOG_PREVIEW_LIMIT = 32_768;
+export function summarizeChangelogDiff(full: string): {
+  text: string;
+  truncated: boolean;
+  total_length: number;
+} {
+  if (full.length <= CHECK_UPDATE_CHANGELOG_PREVIEW_LIMIT) {
+    return { text: full, truncated: false, total_length: full.length };
+  }
+  let text = full.slice(0, CHECK_UPDATE_CHANGELOG_PREVIEW_LIMIT);
+  // Do not cut a surrogate pair in half when the preview ends at an emoji.
+  const last = text.charCodeAt(text.length - 1);
+  if (last >= 0xD800 && last <= 0xDBFF) text = text.slice(0, -1);
+  return { text, truncated: true, total_length: full.length };
 }
 
 function upgradeCommandForMethod(method: string): string {
@@ -220,6 +248,8 @@ export async function runCheckUpdate(args: string[]) {
         upgrade_command: upgradeCmd,
         release_url: '',
         changelog_diff: '',
+        changelog_diff_truncated: false,
+        changelog_diff_total_length: 0,
         published_at: '',
         error: release.reason,
       }, null, 2));
@@ -247,6 +277,7 @@ export async function runCheckUpdate(args: string[]) {
     changelogDiff = await fetchChangelog(VERSION, latestVersion);
   }
 
+  const preview = summarizeChangelogDiff(changelogDiff);
   const result: CheckUpdateResult = {
     current_version: VERSION,
     current_source: 'package-json',
@@ -254,7 +285,9 @@ export async function runCheckUpdate(args: string[]) {
     update_available: updateAvailable,
     upgrade_command: upgradeCmd,
     release_url: release.url,
-    changelog_diff: changelogDiff,
+    changelog_diff: preview.text,
+    changelog_diff_truncated: preview.truncated,
+    changelog_diff_total_length: preview.total_length,
     published_at: release.published_at,
   };
 
