@@ -1,0 +1,2 @@
+{"id":"q-1","answer_state":"current","answer_evidence_refs":["repo://commit/abc"],"used_note_ids":["decision-1"],"hits":[{"note_id":"decision-1","scope_id":"dev-example","state":"verified"}]}
+{"id":"q-2","answer_state":"historical","answer_evidence_refs":["repo://commit/def"],"hits":[{"note_id":"incident-2","scope_id":"dev-example","state":"superseded"}]}
