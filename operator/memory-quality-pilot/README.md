@@ -26,7 +26,7 @@ python3 scripts/memory_quality_gate.py audit \
 
 No `--fix`, `sync`, `remediate`, token-bearing arguments, `git add`, or network/model calls are performed by this harness. The frontmatter preflight invokes the installed validator without `--fix`, but its behavior must be qualified against the installed CLI before enabling it on a production vault. The invoked pre-existing scope checker is trusted by the operator to be read-only with `--check`; do not supply an unreviewed script. The harness itself prints only aggregate diagnostics. A report is not written to disk unless the operator explicitly redirects stdout.
 
-When the nightly file says `FAILED ... lint_errors=35` or the source shows 73% embeddings under the default 95% inspection threshold, the report is not green. The 95% threshold is an initial *operator policy*, not evidence that every eligible source must be embedded. Missing files or incompatible CLI output yield `unknown`; an unclean Git worktree merits review but is **not** proof of a sync failure.
+When the nightly file says `FAILED ... lint_errors=35` or the source shows 73% embeddings under the default 95% inspection threshold, a nonzero queue, or an active backfill, the report is not green. The 95% threshold is an initial *operator policy*, not evidence that every eligible source must be embedded. Missing files or incompatible CLI output yield `unknown`; an unclean Git worktree merits review but is **not** proof of a sync failure.
 
 ## Offline observation gate
 
@@ -44,7 +44,11 @@ python3 scripts/memory_quality_gate.py evaluate \
   --results examples/synthetic_results.jsonl --json
 ```
 
-Gold JSONL fields: `id`, `expected_note_ids`, `allowed_scopes`. Result JSONL fields: `id`, `hits` (note ID, scope ID, state), `answer_state`, optional `answer_evidence_refs`, and `used_note_ids` for an answer asserted `current`. The result export **must originate from an authorized, separately executed search**; these fixtures are synthetic and demonstrate contracts, not real recall accuracy. The test passes at `hit@5 >= 95%` with zero unauthorized hits, zero stale-as-current, zero uncited current answers, and zero missing cases.
+Gold JSONL fields: `id`, `expected_note_ids`, `allowed_scopes`. Result JSONL fields: `id`, `hits` (note ID, scope ID, state), `answer_state`, optional `answer_evidence_refs`, and `used_note_ids` for an answer asserted `current`. The result export **must originate from an authorized, separately executed search**; these fixtures are synthetic and demonstrate contracts, not real recall accuracy. The test passes at `hit@5 >= 95%` with zero unauthorized hits, zero stale-as-current, zero uncited current answers, zero unresolved or unverified notes used in current answers, and zero missing cases.
+
+## Host qualification and CI
+
+See `HOST-VERIFICATION.md` for the read-only Mac/desktop acceptance handoff. The PR also includes a dedicated GitHub Actions workflow for the **synthetic** Python tests; the main GBrain test workflow is separate. Neither a local test pass nor a green CI workflow constitutes live host acceptance.
 
 ## Tests
 

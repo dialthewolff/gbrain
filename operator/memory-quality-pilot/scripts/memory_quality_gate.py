@@ -93,14 +93,18 @@ def parse_source_status(text: str, *, source: str, min_embed_percent: int = 95) 
         return {"status": "unknown", "reason": "counts_unrecognized"}
     if not 0 <= coverage <= 100 or min(failures, queue, pages) < 0:
         return {"status": "unknown", "reason": "invalid_counts"}
+    # A zero-error index with work still queued or backfilling is not caught up.
+    # Treat that as operator attention, not a proven failure.
+    backfill_state = row[3][:32]
+    backlog_active = queue > 0 or backfill_state.lower() not in {"idle", "complete", "completed"}
     return {
-        "status": "attention" if coverage < min_embed_percent or failures > 0 else "pass",
+        "status": "attention" if coverage < min_embed_percent or failures > 0 or backlog_active else "pass",
         "embed_percent": coverage,
         "embedding_policy_threshold_percent": min_embed_percent,
         "failed_items": failures,
         "queued_items": queue,
         "pages": pages,
-        "backfill_state": row[3][:32],
+        "backfill_state": backfill_state,
     }
 
 
@@ -352,16 +356,31 @@ def evaluate_retrieval(gold: list[dict[str, Any]], results: list[dict[str, Any]]
             if not isinstance(hit, dict) or hit.get("scope_id") not in allowed:
                 measures["unauthorized_hits"] += 1
         if row.get("answer_state") == "current":
-            if not row.get("answer_evidence_refs"):
+            refs = row.get("answer_evidence_refs")
+            if not isinstance(refs, list) or not refs or any(not isinstance(x, str) or not x.strip() for x in refs):
                 measures["uncited_current_answers"] += 1
-            # A stale hit must never support an answer presented as current.
+            # The offline export must show every memory record actually used.
+            # An unreturned ID has unknown scope/state and cannot be silently
+            # counted as current; a candidate or ambiguous state cannot either.
             used = row.get("used_note_ids")
-            if not isinstance(used, list):
+            if not isinstance(used, list) or not used or any(not isinstance(x, str) or not x.strip() for x in used):
                 measures["missing_used_note_ids"] += 1
             else:
+                by_note = defaultdict(list)
                 for hit in hits:
-                    if isinstance(hit, dict) and hit.get("note_id") in used and hit.get("state") in {"superseded", "retracted"}:
+                    if isinstance(hit, dict) and isinstance(hit.get("note_id"), str):
+                        by_note[hit["note_id"]].append(hit)
+                for note_id in set(used):
+                    matching = by_note.get(note_id, [])
+                    if not matching:
+                        measures["unresolved_used_note_ids"] += 1
+                    elif any(h.get("scope_id") != matching[0].get("scope_id") or
+                             h.get("state") != matching[0].get("state") for h in matching[1:]):
+                        measures["ambiguous_used_note_states"] += 1
+                    elif matching[0].get("state") in {"superseded", "retracted"}:
                         measures["stale_as_current"] += 1
+                    elif matching[0].get("state") != "verified":
+                        measures["unverified_used_note_states"] += 1
         elif row.get("answer_state") not in {"unknown", "historical", "unavailable"}:
             measures["invalid_answer_state"] += 1
     measures["duplicate_results"] = duplicate_results
@@ -369,7 +388,8 @@ def evaluate_retrieval(gold: list[dict[str, Any]], results: list[dict[str, Any]]
     total = len(gold)
     rate = (measures["hit_at_k"] / total) if total else 0.0
     hard = ("unauthorized_hits", "stale_as_current", "uncited_current_answers", "missing_or_invalid_result",
-            "missing_used_note_ids", "invalid_gold", "invalid_answer_state", "duplicate_results", "unexpected_results")
+            "missing_used_note_ids", "unresolved_used_note_ids", "ambiguous_used_note_states",
+            "unverified_used_note_states", "invalid_gold", "invalid_answer_state", "duplicate_results", "unexpected_results")
     passed = total > 0 and rate >= min_hit_rate and all(measures[k] == 0 for k in hard)
     return {"status": "pass" if passed else "fail", "cases": total,
             "hit_at_k": measures["hit_at_k"], "k": k, "hit_rate": round(rate, 4),

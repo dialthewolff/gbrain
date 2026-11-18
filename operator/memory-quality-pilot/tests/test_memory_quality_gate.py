@@ -50,6 +50,14 @@ class GBrainTests(unittest.TestCase):
         text = self.TABLE.replace('73%', '100%').replace('idle 0 0', 'idle 2 0')
         self.assertEqual(m.parse_source_status(text, source='secondbrain')['status'], 'attention')
 
+    def test_queued_items_not_green(self):
+        text = self.TABLE.replace('73%', '100%').replace('idle 0 0', 'idle 0 56')
+        self.assertEqual(m.parse_source_status(text, source='secondbrain')['status'], 'attention')
+
+    def test_active_backfill_not_green(self):
+        text = self.TABLE.replace('73%', '100%').replace('idle 0 0', 'running 0 0')
+        self.assertEqual(m.parse_source_status(text, source='secondbrain')['status'], 'attention')
+
 
 class GitTests(unittest.TestCase):
     def test_untracked_and_rename_with_nuls(self):
@@ -134,6 +142,31 @@ class EvaluationTests(unittest.TestCase):
     def test_malformed_result(self):
         r = self.result(); r.pop('used_note_ids')
         self.assertEqual(m.evaluate_retrieval([self.case()], [r])['violations']['missing_used_note_ids'], 1)
+
+    def test_whitespace_evidence_is_not_a_citation(self):
+        r = self.result()
+        r['answer_evidence_refs'] = ['  ']
+        self.assertEqual(m.evaluate_retrieval([self.case()], [r])['violations']['uncited_current_answers'], 1)
+
+    def test_unreturned_used_note_cannot_be_claimed_current(self):
+        r = self.result()
+        r['used_note_ids'] = ['unreturned-note']
+        self.assertEqual(m.evaluate_retrieval([self.case()], [r])['violations']['unresolved_used_note_ids'], 1)
+
+    def test_unverified_used_note_cannot_be_claimed_current(self):
+        r = self.result()
+        r['hits'][0]['state'] = 'candidate'
+        self.assertEqual(m.evaluate_retrieval([self.case()], [r])['violations']['unverified_used_note_states'], 1)
+
+    def test_empty_used_notes_never_verify_current_answer(self):
+        r = self.result()
+        r['used_note_ids'] = []
+        self.assertEqual(m.evaluate_retrieval([self.case()], [r])['violations']['missing_used_note_ids'], 1)
+
+    def test_conflicting_states_for_same_used_note_fail_closed(self):
+        r = self.result()
+        r['hits'].append({'note_id': 'note-1', 'scope_id': 'dev', 'state': 'retracted'})
+        self.assertEqual(m.evaluate_retrieval([self.case()], [r])['violations']['ambiguous_used_note_states'], 1)
 
 
 class IntegrationTests(unittest.TestCase):
